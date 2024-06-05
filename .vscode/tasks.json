@@ -10,7 +10,8 @@
                 "${file}",
                 "-o",
                 "${fileDirname}\\${fileBasenameNoExtension}.exe",
-                "-lws2_32"
+                "-lws2_32",
+                "-lcrypto"
             ],
             "options": {
                 "cwd": "C:\\msys64\\ucrt64\\bin"

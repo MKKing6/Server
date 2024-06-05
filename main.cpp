@@ -8,6 +8,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <list>
+#include <string>
+#include <openssl/evp.h>
+#include <openssl/sha.h>
 
 // // Need to link with Ws2_32.lib
 // #pragma comment (lib, "Ws2_32.lib")
@@ -106,17 +109,47 @@ int __cdecl main(void)
                 if (iResult > 0) {
                     recvbuf[iResult] = 0;
                     printf("Bytes received: %d\n%s\n", iResult, recvbuf);
-                    
-                    strcat(recvbuf, " 123");
+                    string recv = recvbuf;
+                    string str;
+                    string key;
+                    string key2 = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+                    int pos = 0;
+                    int pos2 = 0;
+                    char encodedData[100];
+
+                    while((pos2 = recv.find("\n", pos)) != string::npos) {
+                        str = recv.substr(pos, pos2 - pos);
+                        printf("#%s\n", str.c_str());
+                        pos = pos2 + 1;
+                        if (str.find("Sec-WebSocket-Key") != string::npos) {
+                            key = str.substr(str.find(":") + 2, string::npos);
+                            printf("%s\n", key.c_str());
+                            key.append(key2);
+                            unsigned char hash[SHA_DIGEST_LENGTH]; 
+  
+                            EVP_Q_digest(NULL, "SHA1", NULL, (unsigned char*)key.c_str(), strlen(key.c_str()), hash, NULL);
+                            EVP_EncodeBlock((unsigned char *)encodedData, hash, SHA_DIGEST_LENGTH);
+                            printf(encodedData);
+                            break;
+                        }
+                    }  
+
+                    string r1 = "HTTP/1.1 101 Switching Protocols\nUpgrade: websocket\nConnection: Upgrade\nSec-WebSocket-Accept: "; 
+                    string r2 = "\nSec-WebSocket-Version: 13";
+                    string rr = r1;
+                    rr.append(encodedData);
+                    rr.append(r2);
+
+                    printf("%s", rr.c_str());
+
                     // Echo the buffer back to the sender
-                    iSendResult = send( ClientSocket, recvbuf, (int)strlen(recvbuf), 0 );
+                    iSendResult = send( ClientSocket, rr.c_str(), (int)strlen(rr.c_str()), 0 );
                     if (iSendResult == SOCKET_ERROR) {
                         printf("send failed with error: %d\n", WSAGetLastError());
                         closesocket(ClientSocket);
                         WSACleanup();
                         return 1;
-                    }
-                    printf("Bytes sent: %d\n", iSendResult);
+                    }                    
                 }
             }
         }

@@ -21,13 +21,69 @@
 
 using namespace std;
 
+class Client {
+    public:
+        SOCKET ClientSocket;
+        bool handshake;
+        Client(SOCKET ClientSocket) {
+            this->ClientSocket = ClientSocket; 
+            handshake = false;
+        }
+
+        bool checkHandshake(string buffer) {
+            if (handshake == true) return true;
+            string str;
+            string key;
+            string key2 = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+            int pos = 0;
+            int pos2 = 0;
+            char encodedData[100];
+
+            while((pos2 = buffer.find("\r\n", pos)) != string::npos) {
+                str = buffer.substr(pos, pos2 - pos);
+                printf("#%s\n", str.c_str());
+                pos = pos2 + 2;
+                if (str.find("Sec-WebSocket-Key") != string::npos) {
+                    key = str.substr(str.find(":") + 2, string::npos);
+                    printf("%s\n", key.c_str());
+                    key.append(key2);
+                    unsigned char hash[SHA_DIGEST_LENGTH]; 
+
+                    EVP_Q_digest(NULL, "SHA1", NULL, (unsigned char*)key.c_str(), strlen(key.c_str()), hash, NULL);
+                    EVP_EncodeBlock((unsigned char *)encodedData, hash, SHA_DIGEST_LENGTH);
+                    printf(encodedData);
+
+                    string r1 = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: "; 
+                    string r2 = "\r\nSec-WebSocket-Version: 13\r\n\r\n";
+                    string rr = r1;
+                    rr.append(encodedData);
+                    rr.append(r2);
+
+                    printf("%s", rr.c_str());
+
+                    // Echo the buffer back to the sender
+                    int iSendResult = send(ClientSocket, rr.c_str(), (int)strlen(rr.c_str()), 0 );
+                    if (iSendResult == SOCKET_ERROR) {
+                        printf("send failed with error: %d\n", WSAGetLastError());
+                        closesocket(ClientSocket);
+                        return false;
+                    }    
+                    handshake = true;
+
+                    break;
+                }
+            } 
+            return true; 
+        }
+};
+
 int __cdecl main(void) 
 {
     WSADATA wsaData;
     int iResult;
 
     SOCKET ListenSocket = INVALID_SOCKET;
-    list<SOCKET> ClientList;
+    list<Client> ClientList;
     SOCKET ClientSocket = INVALID_SOCKET;
 
     struct addrinfo *result = NULL;
@@ -96,63 +152,34 @@ int __cdecl main(void)
     while (true) {
         FD_ZERO(&ReadSet);
         FD_SET(ListenSocket, &ReadSet);
-        list<SOCKET>::iterator it;
+        list<Client>::iterator it;
         for (it = ClientList.begin(); it != ClientList.end(); ++it) {
-            FD_SET(*it, &ReadSet);
+            FD_SET(it->ClientSocket, &ReadSet);
         }
 
         select(0, &ReadSet, NULL, NULL, &timeVal);
 
         for (it = ClientList.begin(); it != ClientList.end(); ++it) {
-            if (FD_ISSET(*it, &ReadSet)) {
-                iResult = recv(ClientSocket, recvbuf, recvbuflen, 0);
+            printf("%x ", *it);
+            if (FD_ISSET(it->ClientSocket, &ReadSet)) {
+                iResult = recv(it->ClientSocket, recvbuf, recvbuflen, 0);
+                printf("result=%d ", iResult);
                 if (iResult > 0) {
                     recvbuf[iResult] = 0;
                     printf("Bytes received: %d\n%s\n", iResult, recvbuf);
-                    string recv = recvbuf;
-                    string str;
-                    string key;
-                    string key2 = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-                    int pos = 0;
-                    int pos2 = 0;
-                    char encodedData[100];
-
-                    while((pos2 = recv.find("\n", pos)) != string::npos) {
-                        str = recv.substr(pos, pos2 - pos);
-                        printf("#%s\n", str.c_str());
-                        pos = pos2 + 1;
-                        if (str.find("Sec-WebSocket-Key") != string::npos) {
-                            key = str.substr(str.find(":") + 2, string::npos);
-                            printf("%s\n", key.c_str());
-                            key.append(key2);
-                            unsigned char hash[SHA_DIGEST_LENGTH]; 
-  
-                            EVP_Q_digest(NULL, "SHA1", NULL, (unsigned char*)key.c_str(), strlen(key.c_str()), hash, NULL);
-                            EVP_EncodeBlock((unsigned char *)encodedData, hash, SHA_DIGEST_LENGTH);
-                            printf(encodedData);
-                            break;
-                        }
-                    }  
-
-                    string r1 = "HTTP/1.1 101 Switching Protocols\nUpgrade: websocket\nConnection: Upgrade\nSec-WebSocket-Accept: "; 
-                    string r2 = "\nSec-WebSocket-Version: 13";
-                    string rr = r1;
-                    rr.append(encodedData);
-                    rr.append(r2);
-
-                    printf("%s", rr.c_str());
-
-                    // Echo the buffer back to the sender
-                    iSendResult = send( ClientSocket, rr.c_str(), (int)strlen(rr.c_str()), 0 );
-                    if (iSendResult == SOCKET_ERROR) {
-                        printf("send failed with error: %d\n", WSAGetLastError());
-                        closesocket(ClientSocket);
-                        WSACleanup();
-                        return 1;
-                    }                    
+                    if (!it->checkHandshake(recvbuf)) {
+                        it = ClientList.erase(it);
+                        it--;
+                        continue;
+                    }
+                    for (int i = 0; i < iResult; i++) {
+                        printf("%u ", (unsigned char)recvbuf[i]);
+                    }
+                    printf("\n");            
                 }
             }
         }
+        printf("\n");
 
         if (FD_ISSET(ListenSocket, &ReadSet)) {
             // Accept a client socket
@@ -161,7 +188,8 @@ int __cdecl main(void)
                 printf("accept failed with error: %d\n", WSAGetLastError());
             }
             else {
-                ClientList.push_back(ClientSocket);
+                Client client(ClientSocket);
+                ClientList.push_back(client);
                 printf("Connected\n");
             }
 

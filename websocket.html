@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 <!DOCTYPE html>
 <meta charset="utf-8" />
 <title>WebSocket Test</title>
@@ -116,3 +117,123 @@ function wsClear() {
 </script>
 
 </html>
+=======
+<!DOCTYPE html>
+<meta charset="utf-8" />
+<title>WebSocket Test</title>
+
+<script language="javascript" type="text/javascript">
+var websocket;
+var output;
+function init() {
+	output = document.getElementById("output");
+}
+function doConnect(url) {
+	if (!websocket || websocket.readyState != WebSocket.OPEN) {
+		websocket = new WebSocket(url);
+		websocket.onopen = function(evt) { onOpen(evt) };
+		websocket.onclose = function(evt) { onClose(evt) };
+		websocket.onmessage = function(evt) { onMessage(evt) };
+		websocket.onerror = function(evt) { onError(evt) };
+	}
+	else {
+		writeToScreen('<span style="color:red;">Connection opened already</span>');
+	}
+}
+function doSend(message) {
+	if (websocket && websocket.readyState == WebSocket.OPEN) {
+		let m2 = message.replaceAll("\n", "<br/>");
+		writeToScreen("SENT:<br/>"+m2);
+		websocket.send(message);
+	}
+	else {
+		writeToScreen('<span style="color:red;">Connection not open yet</span>');
+	}
+}
+function doDisconnect() {
+	if (websocket && websocket.readyState == WebSocket.OPEN) {
+		websocket.close();
+		delete websocket;
+	}
+	else {
+		writeToScreen('<span style="color:red;">Connection closed already</span>');
+	}
+}
+function onOpen(evt) {
+	writeToScreen("CONNECTED");
+}
+function onClose(evt) {
+	writeToScreen("DISCONNECTED");
+}
+function onMessage(evt) {
+	writeToScreen('<span style="color:blue;">RECEIVE:<br/>'+evt.data.replaceAll("\n", "<br/>")+'</span>');
+}
+function onError(evt) {
+	writeToScreen('<span style="color:red;">ERROR: '+evt.data+'</span>');
+}
+function writeToScreen(message) {
+	var p = document.createElement("p");
+	p.style.wordWrap = "break-word";
+	p.innerHTML = message;
+	output.appendChild(p);
+}
+function clearScreen() {
+	while (output.hasChildNodes()) {
+		output.removeChild(output.lastChild);
+	}
+}
+window.addEventListener("load", init, false);
+</script>
+
+<style>
+body, form, button {
+	font-family: verdana;
+	font-size: 100%;
+	font-weight: 700;;
+}
+input.message, div.output {
+	font-family: verdana;
+	font-size: 90%;
+	font-weight: 700;;
+}
+textarea {
+  width: 80%;
+  height: 100px;
+}
+</style>
+
+<body onload="wsConnect()">
+<h1>WebSocket Chat</h1>
+<hr>
+  <button onclick="wsConnect()">Connect</button>
+  <button onclick="wsDisconnect()">Disconnect</button>
+<hr>
+  <textarea type="text" class="message" maxlength="500" id="message" value=""></textarea>
+  <br>
+  <button onclick="wsSend()">Send</button>
+  <button onclick="wsClear()">Clear</button>
+  <div class="output" id="output"></div>
+</body>
+
+<script language="javascript" type="text/javascript">
+function wsConnect() {
+	var url = "ws://localhost:9899";
+	writeToScreen("Connect to "+url);
+	doConnect(url);
+}
+function wsDisconnect() {
+	doDisconnect();
+}
+function wsSend() {
+	var input = document.getElementById("message");
+	var msg = input.value.trim();
+	if (msg.length > 0) { doSend(msg); }
+	input.value = "";
+}
+function wsClear() {
+	clearScreen()
+}
+</script>
+
+</html>
+>>>>>>> f845755a9b0248582c27e68a4797d44e85b529a1

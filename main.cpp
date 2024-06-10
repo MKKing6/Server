@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <list>
 #include <string>
+#include <math.h>
 #include <openssl/evp.h>
 #include <openssl/sha.h>
 
@@ -17,7 +18,15 @@
 // // #pragma comment (lib, "Mswsock.lib")
 
 #define DEFAULT_BUFLEN 512
-#define DEFAULT_PORT "27015"
+#define DEFAULT_PORT "9899"
+
+namespace mask {
+    const int
+        OPCODE_MASK = 0x0F,
+        FIN_MASK = 0x80,
+        MASK_MASK = 0x80,
+        LENGTH_MASK = 0x7F;
+};
 
 using namespace std;
 
@@ -30,8 +39,7 @@ class Client {
             handshake = false;
         }
 
-        bool checkHandshake(string buffer) {
-            if (handshake == true) return true;
+        bool doHandshake(string buffer) {
             string str;
             string key;
             string key2 = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -74,6 +82,106 @@ class Client {
                 }
             } 
             return true; 
+        }
+
+        string decodeFrame(char frame[], int size, int &opcodeRet) {
+            printf("\n");
+            for (int i = 0; i < size; i++) {
+                printf("%u ", (unsigned char)frame[i]);
+            }
+            printf("\n");
+            unsigned int opcode = (unsigned int)frame[0] & mask::OPCODE_MASK;
+            switch (opcode) {
+                case 0x01:
+                    opcodeRet = 1;
+                    return decodeText(frame, size);
+                case 0x08:
+                    opcodeRet = 8;
+                    return "";
+                case 0x09:
+                    opcodeRet = 9;
+                    return decodeText(frame, size);
+            }
+            return "";
+        }
+
+        string decodeText(char frame[], int size) {
+            unsigned int length = (unsigned char)frame[1] & mask::LENGTH_MASK;
+            if(length < 126) {
+                printf("Length(less than 7 bits): %u\n", length);
+                string encode;
+                for (int i = 6; i < size; i++) {
+                    encode.append(1, frame[i]);
+                }
+                if (((unsigned char)frame[1] & mask::MASK_MASK) == 0x80) {
+                    string mask;
+                    for (int i = 2; i < 6; i++) {
+                        mask.append(1, frame[i]);
+                    }
+                    unmask(mask, encode);
+                }
+                return encode;
+            }
+            else if(length == 126) {
+                length = (unsigned char)frame[2] * 256 + (unsigned char)frame[3];
+                printf("Length(16 bits): %u\n", length);
+                string message;
+                for (int i = 8; i < size; i++) {
+                    message.append(1, frame[i]);
+                }
+                if (((unsigned char)frame[1] & mask::MASK_MASK) == 0x80) {
+                    string mask;
+                    for (int i = 4; i < 8; i++) {
+                        mask.append(1, frame[i]);
+                    }
+                    unmask(mask, message);
+                }
+                return message;
+            }
+            else {
+                length = 0;
+                for (int i = 7; i >= 0; i--) {
+                    length += (unsigned char)frame[2 + (7-i)] * pow(256, i);
+                }
+                printf("Length(64 bits): %u\n", length);
+                return "";
+            }
+        }
+
+        void unmask(string mask, string& encode) {
+            string decode;
+            for (int i = 0; i < encode.size(); i++) {
+                decode.append(1, (unsigned char)encode[i] ^ (unsigned char)mask[i%4]);
+            }
+            encode = decode;
+        }
+
+        string encode(string message, int opcode) {
+            string encode;
+            unsigned char firstByte;
+            if (opcode == 1) {
+                firstByte = (unsigned char)0x81;
+            }
+            else if (opcode == 9) {
+                firstByte = (unsigned char)0x8A;
+            }
+            encode.append(1, firstByte);
+            if (message.size() < 126) {
+                encode.append(1, (unsigned char)message.size());
+                encode += message;
+                printf("%s %d\n", encode.c_str(), encode.size());
+                return encode;
+            }
+            else if (message.size() < pow(2, 16)) {
+                encode.append(1, (unsigned char)126);
+                encode.append(1, (unsigned char)(message.size() / 256));
+                encode.append(1, (unsigned char)(message.size() % 256));
+                encode.append(message); 
+                printf("%u %u\n", encode[2], encode[3]);
+                printf("%d\n%s %d\n", message.size(), encode.c_str(), encode.size());
+                return encode;
+            }
+            return "";
         }
 };
 
@@ -160,26 +268,74 @@ int __cdecl main(void)
         select(0, &ReadSet, NULL, NULL, &timeVal);
 
         for (it = ClientList.begin(); it != ClientList.end(); ++it) {
-            printf("%x ", *it);
             if (FD_ISSET(it->ClientSocket, &ReadSet)) {
+                string message;
                 iResult = recv(it->ClientSocket, recvbuf, recvbuflen, 0);
                 printf("result=%d ", iResult);
+                if (iResult == 0) {
+                    it = ClientList.erase(it);
+                    it--;
+                    continue;
+                }
                 if (iResult > 0) {
                     recvbuf[iResult] = 0;
-                    printf("Bytes received: %d\n%s\n", iResult, recvbuf);
-                    if (!it->checkHandshake(recvbuf)) {
-                        it = ClientList.erase(it);
-                        it--;
-                        continue;
+                    //printf("Bytes received: %d\n%s\n", iResult, recvbuf);
+                    if (it->handshake) {
+                        int opcode;
+
+                        message = it->decodeFrame(recvbuf, iResult, opcode);
+                        switch (opcode) {
+                            case 1: {
+                                printf("%s\n", message.c_str());
+                                string frame = it->encode(message, opcode);
+                                list<Client>::iterator sent;
+                                for (sent = ClientList.begin(); sent != ClientList.end(); ++sent) {
+                                    if (it == sent) continue;
+                                    int iSendResult = send(sent->ClientSocket, frame.c_str(), frame.length(), 0);
+                                    if (iSendResult == SOCKET_ERROR) {
+                                        printf("send failed with error: %d\n", WSAGetLastError());
+                                        closesocket(it->ClientSocket);
+                                        return 1;
+                                    }
+                                }
+                                break;
+                            }
+                            case 8: {
+                                string frame;
+                                frame.append(1, (unsigned char)136);
+                                frame.append(1, (unsigned char)0);
+                                int iSendResult = send(it->ClientSocket, frame.c_str(), frame.length(), 0);
+                                if (iSendResult == SOCKET_ERROR) {
+                                    printf("send failed with error: %d\n", WSAGetLastError());
+                                    closesocket(it->ClientSocket);
+                                    return 1;
+                                }
+                                it = ClientList.erase(it);
+                                it--; 
+                                break;
+                            }
+                            case 9: {
+                                string frame = it->encode(message, opcode);
+                                int iSendResult = send(it->ClientSocket, frame.c_str(), frame.length(), 0);
+                                if (iSendResult == SOCKET_ERROR) {
+                                    printf("send failed with error: %d\n", WSAGetLastError());
+                                    closesocket(it->ClientSocket);
+                                    return 1;
+                                }
+                                break;
+                            }
+                        }
                     }
-                    for (int i = 0; i < iResult; i++) {
-                        printf("%u ", (unsigned char)recvbuf[i]);
-                    }
-                    printf("\n");            
+                    else {
+                        if (!it->doHandshake(recvbuf)) {
+                            it = ClientList.erase(it);
+                            it--;
+                            continue;
+                        }
+                    }            
                 }
             }
         }
-        printf("\n");
 
         if (FD_ISSET(ListenSocket, &ReadSet)) {
             // Accept a client socket
@@ -192,39 +348,6 @@ int __cdecl main(void)
                 ClientList.push_back(client);
                 printf("Connected\n");
             }
-
-            // No longer need server socket
-            //closesocket(ListenSocket);
-
-            // Receive until the peer shuts down the connection
-            // do {
-
-            //     iResult = recv(ClientSocket, recvbuf, recvbuflen, 0);
-            //     if (iResult > 0) {
-            //         recvbuf[iResult] = 0;
-            //         printf("Bytes received: %d\n%s\n", iResult, recvbuf);
-
-            //         strcat(recvbuf, " 123");
-            //     // Echo the buffer back to the sender
-            //         iSendResult = send( ClientSocket, recvbuf, (int)strlen(recvbuf), 0 );
-            //         if (iSendResult == SOCKET_ERROR) {
-            //             printf("send failed with error: %d\n", WSAGetLastError());
-            //             closesocket(ClientSocket);
-            //             WSACleanup();
-            //             return 1;
-            //         }
-            //         printf("Bytes sent: %d\n", iSendResult);
-            //     }
-            //     else if (iResult == 0)
-            //         printf("Connection closing...\n");
-            //     else  {
-            //         printf("recv failed with error: %d\n", WSAGetLastError());
-            //         closesocket(ClientSocket);
-            //         WSACleanup();
-            //         return 1;
-            //     }
-
-            // } while (iResult > 0);
         }
     }
 
